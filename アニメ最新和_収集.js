@@ -384,38 +384,54 @@ function callClaudeManga(mangaTitle, summary) {
 function generateAllArticles() {
   Logger.log("=== アニメ記事生成開始 ===");
   const animeList = fetchLatestAnimeWithRecovery();
-  
+
   // ジャンルフィルタをかける
   const filteredAnime = filterByGenre(animeList);
   const animeTargets = filteredAnime.slice(0, 5);
-  
+
   if (animeTargets.length === 0) {
     Logger.log("該当するアニメ記事なし");
   } else {
     animeTargets.forEach(function(anime, index) {
+      if (isDuplicateArticle(anime.title)) {
+        Logger.log("スキップ（重複）：" + anime.title);
+        return;
+      }
       Logger.log("アニメ " + (index + 1) + "件目：" + anime.title);
       const cleanSummary = anime.summary.replace(/<[^>]*>/g, "").trim();
-      const article = callClaude(anime.title, "最新情報", cleanSummary);
-      Logger.log(article);
+      const articleContent = callClaude(anime.title, "最新情報", cleanSummary);
+      const wpTitle = extractArticleTitle(articleContent) || anime.title;
+      saveArticleHistory(anime.title, articleContent, wpTitle, anime.link, "アニメ");
+      const wpResult = postToWordPress(wpTitle, articleContent, "draft");
+      if (wpResult) updateHistoryWithWpUrl(wpTitle, wpResult.link);
+      Logger.log("投稿完了：" + wpTitle);
       Utilities.sleep(2000);
     });
   }
 
   Logger.log("=== 漫画記事生成開始 ===");
   const mangaList = fetchLatestManga();
-  
+
   // 漫画にも同じジャンルフィルタをかける
   const filteredManga = filterByGenre(mangaList);
   const mangaTargets = filteredManga.slice(0, 5);
-  
+
   if (mangaTargets.length === 0) {
     Logger.log("該当する漫画記事なし");
   } else {
     mangaTargets.forEach(function(manga, index) {
+      if (isDuplicateArticle(manga.title)) {
+        Logger.log("スキップ（重複）：" + manga.title);
+        return;
+      }
       Logger.log("漫画 " + (index + 1) + "件目：" + manga.title);
       const cleanSummary = manga.summary.replace(/<[^>]*>/g, "").trim();
-      const article = callClaudeManga(manga.title, cleanSummary);
-      Logger.log(article);
+      const articleContent = callClaudeManga(manga.title, cleanSummary);
+      const wpTitle = extractArticleTitle(articleContent) || manga.title;
+      saveArticleHistory(manga.title, articleContent, wpTitle, manga.link, "漫画");
+      const wpResult = postToWordPress(wpTitle, articleContent, "draft");
+      if (wpResult) updateHistoryWithWpUrl(wpTitle, wpResult.link);
+      Logger.log("投稿完了：" + wpTitle);
       Utilities.sleep(2000);
     });
   }
@@ -508,4 +524,170 @@ function filterByGenre(articleList) {
   
   Logger.log("フィルタ後：" + filtered.length + "件");
   return filtered;
+}
+
+// ============================================================
+// ① WordPress REST API 自動投稿
+// ============================================================
+// ScriptProperties に以下を設定してください：
+//   WP_URL       : https://your-blog.com  （末尾スラッシュなし）
+//   WP_USERNAME  : WordPressのユーザー名
+//   WP_APP_PASSWORD : 「アプリケーションパスワード」（設定→ユーザー→プロフィールで発行）
+// postStatus: "draft"（下書き） または "publish"（即公開）
+function postToWordPress(title, content, postStatus) {
+  const props = PropertiesService.getScriptProperties();
+  const wpUrl     = props.getProperty("WP_URL");
+  const username  = props.getProperty("WP_USERNAME");
+  const appPass   = props.getProperty("WP_APP_PASSWORD");
+
+  if (!wpUrl || !username || !appPass) {
+    Logger.log("WordPress設定未完了：WP_URL / WP_USERNAME / WP_APP_PASSWORD を ScriptProperties に設定してください");
+    return null;
+  }
+
+  const credentials = Utilities.base64Encode(username + ":" + appPass);
+
+  const payload = {
+    title:   title,
+    content: content,
+    status:  postStatus || "draft"
+  };
+
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    headers: {
+      "Authorization": "Basic " + credentials
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(wpUrl + "/wp-json/wp/v2/posts", options);
+    const statusCode = response.getResponseCode();
+
+    if (statusCode === 201) {
+      const result = JSON.parse(response.getContentText());
+      Logger.log("WordPress投稿成功：ID=" + result.id + " URL=" + result.link);
+      return result;
+    } else {
+      Logger.log("WordPress投稿失敗：HTTP " + statusCode + " → " + response.getContentText());
+      return null;
+    }
+  } catch(e) {
+    Logger.log("WordPress投稿エラー：" + e.message);
+    return null;
+  }
+}
+
+// ============================================================
+// ② スプレッドシートへの記事履歴保存 ＋ 重複チェック
+// ============================================================
+// スプレッドシートID（getActiveGenres と同じシート）の「履歴」シートを使用
+// シートがなければ自動作成します
+const SS_ID = "141tleCwlMGBaEi6ST_ARzFiOqefPwZHvmHiZnJw09is";
+
+function getHistorySheet() {
+  const ss = SpreadsheetApp.openById(SS_ID);
+  let sheet = ss.getSheetByName("履歴");
+  if (!sheet) {
+    sheet = ss.insertSheet("履歴");
+    // ヘッダー行を設定
+    sheet.appendRow(["生成日時", "RSSタイトル", "記事タイトル", "カテゴリ", "ソースURL", "WordPressURL", "本文（先頭300字）"]);
+    sheet.setFrozenRows(1);
+    Logger.log("「履歴」シートを新規作成しました");
+  }
+  return sheet;
+}
+
+function saveArticleHistory(rssTitle, articleContent, wpTitle, sourceLink, category) {
+  const sheet = getHistorySheet();
+  const now   = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy/MM/dd HH:mm:ss");
+  const excerpt = articleContent.replace(/<[^>]*>/g, "").substring(0, 300);
+
+  sheet.appendRow([now, rssTitle, wpTitle, category, sourceLink || "", "", excerpt]);
+  Logger.log("履歴保存：" + wpTitle);
+}
+
+// WordPress投稿後にURLを履歴に書き込む
+function updateHistoryWithWpUrl(wpTitle, wpUrl) {
+  const sheet = getHistorySheet();
+  const data  = sheet.getDataRange().getValues();
+
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (data[i][2] === wpTitle) {
+      sheet.getRange(i + 1, 6).setValue(wpUrl);
+      break;
+    }
+  }
+}
+
+// RSSタイトルが「履歴」シートに存在するか確認（重複防止）
+function isDuplicateArticle(rssTitle) {
+  const sheet = getHistorySheet();
+  const data  = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][1] === rssTitle) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// 生成記事の最初のh2/h3タグからタイトルを抽出するユーティリティ
+function extractArticleTitle(articleContent) {
+  const match = articleContent.match(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/i);
+  if (match) {
+    return match[1].replace(/<[^>]*>/g, "").trim();
+  }
+  // h2/h3がなければ最初の行を使用
+  const firstLine = articleContent.split("\n")[0].replace(/<[^>]*>/g, "").trim();
+  return firstLine.length > 0 ? firstLine : null;
+}
+
+// ============================================================
+// ③ GASトリガー設定（毎日自動実行）
+// ============================================================
+// GASエディタで手動実行してください（初回のみ）
+// 毎日 AM 7:00 に generateAllArticles を自動実行します
+function setupDailyTrigger() {
+  // 既存の同名トリガーを削除してから再登録（重複防止）
+  deleteDailyTrigger();
+
+  ScriptApp.newTrigger("generateAllArticles")
+    .timeBased()
+    .everyDays(1)
+    .atHour(7)
+    .create();
+
+  Logger.log("毎日AM7:00に generateAllArticles を実行するトリガーを設定しました");
+}
+
+// generateAllArticles のトリガーをすべて削除する
+function deleteDailyTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function(trigger) {
+    if (trigger.getHandlerFunction() === "generateAllArticles") {
+      ScriptApp.deleteTrigger(trigger);
+      Logger.log("既存トリガー削除：" + trigger.getUniqueId());
+    }
+  });
+}
+
+// 現在設定されているトリガーを一覧表示する
+function listTriggers() {
+  const triggers = ScriptApp.getProjectTriggers();
+  if (triggers.length === 0) {
+    Logger.log("トリガーは設定されていません");
+    return;
+  }
+  triggers.forEach(function(trigger) {
+    Logger.log(
+      "関数：" + trigger.getHandlerFunction() +
+      " ／ 種別：" + trigger.getEventType() +
+      " ／ ID：" + trigger.getUniqueId()
+    );
+  });
 }
