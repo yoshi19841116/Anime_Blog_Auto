@@ -385,7 +385,6 @@ function generateAllArticles() {
   Logger.log("=== アニメ記事生成開始 ===");
   const animeList = fetchLatestAnimeWithRecovery();
 
-  // ジャンルフィルタをかける
   const filteredAnime = filterByGenre(animeList);
   const animeTargets = filteredAnime.slice(0, 5);
 
@@ -399,20 +398,27 @@ function generateAllArticles() {
       }
       Logger.log("アニメ " + (index + 1) + "件目：" + anime.title);
       const cleanSummary = anime.summary.replace(/<[^>]*>/g, "").trim();
-      const articleContent = callClaude(anime.title, "最新情報", cleanSummary);
+      let articleContent = callClaude(anime.title, "最新情報", cleanSummary);
+      articleContent = insertAffiliateLinks(articleContent, anime.title, "アニメ");
       const wpTitle = extractArticleTitle(articleContent) || anime.title;
+
+      const thumbUrl = generateThumbnail(anime.title);
+      const mediaId  = thumbUrl ? uploadMediaToWordPress(thumbUrl, "thumb_anime_" + Date.now()) : null;
+
       saveArticleHistory(anime.title, articleContent, wpTitle, anime.link, "アニメ");
-      const wpResult = postToWordPress(wpTitle, articleContent, "draft");
-      if (wpResult) updateHistoryWithWpUrl(wpTitle, wpResult.link);
+      const wpResult = postToWordPress(wpTitle, articleContent, "draft", mediaId);
+      if (wpResult) {
+        updateHistoryWithWpUrl(wpTitle, wpResult.link);
+        postToX(buildXPostText(wpTitle, wpResult.link, "アニメ"));
+      }
       Logger.log("投稿完了：" + wpTitle);
-      Utilities.sleep(2000);
+      Utilities.sleep(3000);
     });
   }
 
   Logger.log("=== 漫画記事生成開始 ===");
   const mangaList = fetchLatestManga();
 
-  // 漫画にも同じジャンルフィルタをかける
   const filteredManga = filterByGenre(mangaList);
   const mangaTargets = filteredManga.slice(0, 5);
 
@@ -426,13 +432,21 @@ function generateAllArticles() {
       }
       Logger.log("漫画 " + (index + 1) + "件目：" + manga.title);
       const cleanSummary = manga.summary.replace(/<[^>]*>/g, "").trim();
-      const articleContent = callClaudeManga(manga.title, cleanSummary);
+      let articleContent = callClaudeManga(manga.title, cleanSummary);
+      articleContent = insertAffiliateLinks(articleContent, manga.title, "漫画");
       const wpTitle = extractArticleTitle(articleContent) || manga.title;
+
+      const thumbUrl = generateThumbnail(manga.title);
+      const mediaId  = thumbUrl ? uploadMediaToWordPress(thumbUrl, "thumb_manga_" + Date.now()) : null;
+
       saveArticleHistory(manga.title, articleContent, wpTitle, manga.link, "漫画");
-      const wpResult = postToWordPress(wpTitle, articleContent, "draft");
-      if (wpResult) updateHistoryWithWpUrl(wpTitle, wpResult.link);
+      const wpResult = postToWordPress(wpTitle, articleContent, "draft", mediaId);
+      if (wpResult) {
+        updateHistoryWithWpUrl(wpTitle, wpResult.link);
+        postToX(buildXPostText(wpTitle, wpResult.link, "漫画"));
+      }
       Logger.log("投稿完了：" + wpTitle);
-      Utilities.sleep(2000);
+      Utilities.sleep(3000);
     });
   }
 
@@ -534,7 +548,7 @@ function filterByGenre(articleList) {
 //   WP_USERNAME  : WordPressのユーザー名
 //   WP_APP_PASSWORD : 「アプリケーションパスワード」（設定→ユーザー→プロフィールで発行）
 // postStatus: "draft"（下書き） または "publish"（即公開）
-function postToWordPress(title, content, postStatus) {
+function postToWordPress(title, content, postStatus, featuredMediaId) {
   const props = PropertiesService.getScriptProperties();
   const wpUrl     = props.getProperty("WP_URL");
   const username  = props.getProperty("WP_USERNAME");
@@ -552,6 +566,7 @@ function postToWordPress(title, content, postStatus) {
     content: content,
     status:  postStatus || "draft"
   };
+  if (featuredMediaId) payload.featured_media = featuredMediaId;
 
   const options = {
     method: "post",
@@ -690,4 +705,238 @@ function listTriggers() {
       " ／ ID：" + trigger.getUniqueId()
     );
   });
+}
+
+// ============================================================
+// ④ DALL-E 3 サムネイル自動生成 + WordPress メディアアップロード
+// ============================================================
+// ScriptProperties に追加：
+//   OPENAI_API_KEY : OpenAI APIキー（platform.openai.com で発行）
+
+function generateThumbnail(animeTitle) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("OPENAI_API_KEY");
+  if (!apiKey) {
+    Logger.log("OPENAI_API_KEY が未設定のためサムネイル生成をスキップします");
+    return null;
+  }
+
+  const prompt =
+    "アニメ・漫画「" + animeTitle + "」の考察ブログ用サムネイル画像。" +
+    "ポップなイラスト風、鮮やかな色彩、日本のアニメらしいデザイン。" +
+    "テキストなし、特定キャラクターなし（著作権回避）。";
+
+  const payload = {
+    model: "dall-e-3",
+    prompt: prompt,
+    n: 1,
+    size: "1024x1024",
+    response_format: "url"
+  };
+
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    headers: { "Authorization": "Bearer " + apiKey },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  try {
+    const response = UrlFetchApp.fetch("https://api.openai.com/v1/images/generations", options);
+    if (response.getResponseCode() !== 200) {
+      Logger.log("DALL-E 3 エラー：HTTP " + response.getResponseCode() + " " + response.getContentText());
+      return null;
+    }
+    const result = JSON.parse(response.getContentText());
+    Logger.log("サムネイル生成成功：" + animeTitle);
+    return result.data[0].url;
+  } catch(e) {
+    Logger.log("DALL-E 3 例外：" + e.message);
+    return null;
+  }
+}
+
+// DALL-E 3 が返した画像URLをWordPressメディアライブラリへアップロード
+// 成功時はメディアIDを返す（WordPress投稿のアイキャッチに設定するため）
+function uploadMediaToWordPress(imageUrl, filename) {
+  const props    = PropertiesService.getScriptProperties();
+  const wpUrl    = props.getProperty("WP_URL");
+  const username = props.getProperty("WP_USERNAME");
+  const appPass  = props.getProperty("WP_APP_PASSWORD");
+
+  if (!wpUrl || !username || !appPass) return null;
+
+  try {
+    const imgBlob = UrlFetchApp.fetch(imageUrl).getBlob().setName(filename + ".png");
+    const credentials = Utilities.base64Encode(username + ":" + appPass);
+
+    const options = {
+      method: "post",
+      headers: {
+        "Authorization": "Basic " + credentials,
+        "Content-Disposition": 'attachment; filename="' + filename + '.png"'
+      },
+      contentType: "image/png",
+      payload: imgBlob.getBytes(),
+      muteHttpExceptions: true
+    };
+
+    const response = UrlFetchApp.fetch(wpUrl + "/wp-json/wp/v2/media", options);
+    if (response.getResponseCode() === 201) {
+      const result = JSON.parse(response.getContentText());
+      Logger.log("WPメディアアップロード成功：ID=" + result.id);
+      return result.id;
+    } else {
+      Logger.log("WPメディアアップロード失敗：HTTP " + response.getResponseCode());
+      return null;
+    }
+  } catch(e) {
+    Logger.log("WPメディアアップロード例外：" + e.message);
+    return null;
+  }
+}
+
+// ============================================================
+// ⑤ アフィリエイトリンク自動挿入（Amazon アソシエイト）
+// ============================================================
+// ScriptProperties に追加：
+//   AMAZON_ASSOCIATE_ID : Amazonアソシエイトのトラッキングタグ（例：yourtag-22）
+
+function insertAffiliateLinks(articleContent, title, category) {
+  const associateId = PropertiesService.getScriptProperties().getProperty("AMAZON_ASSOCIATE_ID");
+  if (!associateId) return articleContent;
+
+  const encodedTitle = encodeURIComponent(title);
+  const amazonUrl = "https://www.amazon.co.jp/s?k=" + encodedTitle + "&tag=" + associateId;
+
+  const affiliateBlock =
+    '\n<div class="affiliate-box" style="background:#fff8e1;border:2px solid #ff9800;' +
+    'padding:16px;margin:24px 0;border-radius:8px;">' +
+    '<p style="margin:0 0 8px;font-weight:bold;">関連グッズ・コミックをAmazonでチェック</p>' +
+    '<a href="' + amazonUrl + '" target="_blank" rel="nofollow noopener" ' +
+    'style="color:#e65100;font-weight:bold;">▶ Amazon で「' + title + '」を探す</a>' +
+    '</div>\n';
+
+  // まとめ見出し（最後の </h2> か </h3>）の直後に挿入
+  const lastH2 = articleContent.lastIndexOf("</h2>");
+  const lastH3 = articleContent.lastIndexOf("</h3>");
+  const insertPos = Math.max(lastH2, lastH3);
+
+  if (insertPos !== -1) {
+    const endTag = insertPos === lastH2 ? "</h2>" : "</h3>";
+    const splitAt = insertPos + endTag.length;
+    return articleContent.substring(0, splitAt) + affiliateBlock + articleContent.substring(splitAt);
+  }
+  return articleContent + affiliateBlock;
+}
+
+// ============================================================
+// ⑥ X (Twitter) 自動投稿（OAuth 1.0a）
+// ============================================================
+// ScriptProperties に追加：
+//   X_API_KEY        : Consumer Key
+//   X_API_SECRET     : Consumer Secret
+//   X_ACCESS_TOKEN   : Access Token
+//   X_ACCESS_SECRET  : Access Token Secret
+// ※ Twitter Developer Portal で「Read and Write」権限のAppが必要
+
+function postToX(text) {
+  const props       = PropertiesService.getScriptProperties();
+  const apiKey      = props.getProperty("X_API_KEY");
+  const apiSecret   = props.getProperty("X_API_SECRET");
+  const accToken    = props.getProperty("X_ACCESS_TOKEN");
+  const accSecret   = props.getProperty("X_ACCESS_SECRET");
+
+  if (!apiKey || !apiSecret || !accToken || !accSecret) {
+    Logger.log("X API設定未完了：X_API_KEY / X_API_SECRET / X_ACCESS_TOKEN / X_ACCESS_SECRET を設定してください");
+    return null;
+  }
+
+  const url = "https://api.twitter.com/2/tweets";
+
+  const oauthParams = {
+    oauth_consumer_key:     apiKey,
+    oauth_nonce:            Utilities.base64Encode(
+                              Utilities.newBlob(Math.random().toString()).getBytes()
+                            ).replace(/[^a-zA-Z0-9]/g, ""),
+    oauth_signature_method: "HMAC-SHA1",
+    oauth_timestamp:        Math.floor(Date.now() / 1000).toString(),
+    oauth_token:            accToken,
+    oauth_version:          "1.0"
+  };
+
+  // OAuth 1.0a 署名
+  const paramString = Object.keys(oauthParams).sort()
+    .map(function(k) { return encodeURIComponent(k) + "=" + encodeURIComponent(oauthParams[k]); })
+    .join("&");
+  const signatureBase = "POST&" + encodeURIComponent(url) + "&" + encodeURIComponent(paramString);
+  const signingKey    = encodeURIComponent(apiSecret) + "&" + encodeURIComponent(accSecret);
+  const signature     = Utilities.base64Encode(
+    Utilities.computeHmacSha1Signature(signatureBase, signingKey)
+  );
+  oauthParams.oauth_signature = signature;
+
+  const authHeader = "OAuth " + Object.keys(oauthParams).sort()
+    .map(function(k) {
+      return encodeURIComponent(k) + '="' + encodeURIComponent(oauthParams[k]) + '"';
+    }).join(", ");
+
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    headers: { "Authorization": authHeader },
+    payload: JSON.stringify({ text: text }),
+    muteHttpExceptions: true
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    if (response.getResponseCode() === 201) {
+      const result = JSON.parse(response.getContentText());
+      Logger.log("X投稿成功：" + result.data.id);
+      return result;
+    } else {
+      Logger.log("X投稿失敗：HTTP " + response.getResponseCode() + " → " + response.getContentText());
+      return null;
+    }
+  } catch(e) {
+    Logger.log("X投稿例外：" + e.message);
+    return null;
+  }
+}
+
+// X投稿テキストを組み立てる（280文字以内）
+function buildXPostText(wpTitle, wpUrl, category) {
+  const tag = category === "漫画"
+    ? "#漫画 #漫画考察 #マンガ"
+    : "#アニメ #アニメ考察 #anime";
+  const text = "【新着考察】" + wpTitle + "\n\n" + tag + "\n\n" + wpUrl;
+  return text.length <= 280 ? text : text.substring(0, 277) + "...";
+}
+
+// ============================================================
+// ⑦ 週3回トリガー設定（月・水・金 AM6:00）
+// ============================================================
+// setupWeeklyTriggers() を手動で1回実行するだけでOKです
+// ※ setupDailyTrigger は週3回版に置き換えられました
+
+function setupWeeklyTriggers() {
+  deleteDailyTrigger(); // 既存の日次トリガーをすべて削除
+
+  const days = [
+    ScriptApp.WeekDay.MONDAY,
+    ScriptApp.WeekDay.WEDNESDAY,
+    ScriptApp.WeekDay.FRIDAY
+  ];
+
+  days.forEach(function(day) {
+    ScriptApp.newTrigger("generateAllArticles")
+      .timeBased()
+      .onWeekDay(day)
+      .atHour(6)
+      .create();
+  });
+
+  Logger.log("週3回（月・水・金 AM6:00）トリガーを設定しました");
+  listTriggers();
 }
