@@ -398,9 +398,10 @@ function generateAllArticles() {
       }
       Logger.log("アニメ " + (index + 1) + "件目：" + anime.title);
       const cleanSummary = anime.summary.replace(/<[^>]*>/g, "").trim();
-      let articleContent = callClaude(anime.title, "最新情報", cleanSummary);
+      const rawArticle = callClaude(anime.title, "最新情報", cleanSummary);
+      const wpTitle = extractArticleTitle(rawArticle) || anime.title;
+      let articleContent = markdownToHtml(rawArticle);
       articleContent = insertAffiliateLinks(articleContent, anime.title, "アニメ");
-      const wpTitle = extractArticleTitle(articleContent) || anime.title;
 
       const thumbUrl = generateThumbnail(anime.title);
       const mediaId  = thumbUrl ? uploadMediaToWordPress(thumbUrl, "thumb_anime_" + Date.now()) : null;
@@ -435,9 +436,10 @@ function generateAllArticles() {
       }
       Logger.log("漫画 " + (index + 1) + "件目：" + manga.title);
       const cleanSummary = manga.summary.replace(/<[^>]*>/g, "").trim();
-      let articleContent = callClaudeManga(manga.title, cleanSummary);
+      const rawArticle = callClaudeManga(manga.title, cleanSummary);
+      const wpTitle = extractArticleTitle(rawArticle) || manga.title;
+      let articleContent = markdownToHtml(rawArticle);
       articleContent = insertAffiliateLinks(articleContent, manga.title, "漫画");
-      const wpTitle = extractArticleTitle(articleContent) || manga.title;
 
       const thumbUrl = generateThumbnail(manga.title);
       const mediaId  = thumbUrl ? uploadMediaToWordPress(thumbUrl, "thumb_manga_" + Date.now()) : null;
@@ -699,16 +701,85 @@ function isDuplicateArticle(rssTitle) {
   return false;
 }
 
-// 生成記事の最初のh2/h3タグからタイトルを抽出するユーティリティ
+// 記事タイトルを抽出（マークダウン見出し・HTML見出し両対応・記号を除去）
 function extractArticleTitle(articleContent) {
-  const match = articleContent.match(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/i);
-  if (match) {
-    return match[1].replace(/<[^>]*>/g, "").trim();
+  const lines = articleContent.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    // 先頭の # や ** などの記号を除去して最初の意味ある行をタイトルに
+    const cleaned = line
+      .replace(/<[^>]*>/g, "")        // HTMLタグ除去
+      .replace(/^#{1,6}\s*/, "")      // 見出し記号 # を除去
+      .replace(/\*\*/g, "")           // 太字記号を除去
+      .replace(/^[-*]\s*/, "")        // 箇条書き記号を除去
+      .trim();
+    if (cleaned.length > 0) return cleaned;
   }
-  // h2/h3がなければ最初の行を使用
-  const firstLine = articleContent.split("\n")[0].replace(/<[^>]*>/g, "").trim();
-  return firstLine.length > 0 ? firstLine : null;
+  return null;
 }
+
+// マークダウンをWordPress用のHTMLに変換する
+function markdownToHtml(md) {
+  // 1行目が見出し（タイトル）の場合は本文から除去（WP側でタイトル表示するため）
+  const lines = md.split("\n");
+  if (lines.length > 0 && /^#{1,3}\s/.test(lines[0].trim())) {
+    lines.shift();
+  }
+  md = lines.join("\n");
+
+  const blocks = md.split(/\n{2,}/); // 空行でブロック分割
+  const htmlParts = [];
+
+  blocks.forEach(function(block) {
+    block = block.trim();
+    if (!block) return;
+
+    // 水平線
+    if (/^-{3,}$/.test(block)) {
+      return; // 区切り線は出力しない（見た目すっきり）
+    }
+
+    // 見出し
+    let m;
+    if ((m = block.match(/^###\s+(.*)$/))) {
+      htmlParts.push("<h3>" + inlineMd(m[1]) + "</h3>");
+      return;
+    }
+    if ((m = block.match(/^##\s+(.*)$/))) {
+      htmlParts.push("<h2>" + inlineMd(m[1]) + "</h2>");
+      return;
+    }
+    if ((m = block.match(/^#\s+(.*)$/))) {
+      htmlParts.push("<h2>" + inlineMd(m[1]) + "</h2>");
+      return;
+    }
+
+    // 箇条書きリスト（行頭が - か * の連続）
+    const blockLines = block.split("\n");
+    const isList = blockLines.every(function(l) { return /^\s*[-*]\s+/.test(l); });
+    if (isList) {
+      const items = blockLines.map(function(l) {
+        return "<li>" + inlineMd(l.replace(/^\s*[-*]\s+/, "")) + "</li>";
+      });
+      htmlParts.push("<ul>" + items.join("") + "</ul>");
+      return;
+    }
+
+    // 通常段落（ブロック内の改行は<br>に）
+    htmlParts.push("<p>" + inlineMd(block).replace(/\n/g, "<br>") + "</p>");
+  });
+
+  return htmlParts.join("\n");
+}
+
+// インライン記法（太字・リンク）を変換
+function inlineMd(text) {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")   // **太字**
+    .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2">$1</a>'); // [text](url)
+}
+
 
 // ============================================================
 // ③ GASトリガー設定（毎日自動実行）
