@@ -405,13 +405,16 @@ function generateAllArticles() {
       const thumbUrl = generateThumbnail(anime.title);
       const mediaId  = thumbUrl ? uploadMediaToWordPress(thumbUrl, "thumb_anime_" + Date.now()) : null;
 
-      saveArticleHistory(anime.title, articleContent, wpTitle, anime.link, "アニメ");
       const wpResult = postToWordPress(wpTitle, articleContent, "draft", mediaId);
       if (wpResult) {
+        // 投稿に成功したときだけ履歴へ保存（失敗時は次回リトライ）
+        saveArticleHistory(anime.title, articleContent, wpTitle, anime.link, "アニメ");
         updateHistoryWithWpUrl(wpTitle, wpResult.link);
         postToX(buildXPostText(wpTitle, wpResult.link, "アニメ"));
+        Logger.log("投稿完了：" + wpTitle);
+      } else {
+        Logger.log("投稿失敗のため履歴に保存しません（次回リトライ）：" + wpTitle);
       }
-      Logger.log("投稿完了：" + wpTitle);
       Utilities.sleep(3000);
     });
   }
@@ -439,13 +442,16 @@ function generateAllArticles() {
       const thumbUrl = generateThumbnail(manga.title);
       const mediaId  = thumbUrl ? uploadMediaToWordPress(thumbUrl, "thumb_manga_" + Date.now()) : null;
 
-      saveArticleHistory(manga.title, articleContent, wpTitle, manga.link, "漫画");
       const wpResult = postToWordPress(wpTitle, articleContent, "draft", mediaId);
       if (wpResult) {
+        // 投稿に成功したときだけ履歴へ保存（失敗時は次回リトライ）
+        saveArticleHistory(manga.title, articleContent, wpTitle, manga.link, "漫画");
         updateHistoryWithWpUrl(wpTitle, wpResult.link);
         postToX(buildXPostText(wpTitle, wpResult.link, "漫画"));
+        Logger.log("投稿完了：" + wpTitle);
+      } else {
+        Logger.log("投稿失敗のため履歴に保存しません（次回リトライ）：" + wpTitle);
       }
-      Logger.log("投稿完了：" + wpTitle);
       Utilities.sleep(3000);
     });
   }
