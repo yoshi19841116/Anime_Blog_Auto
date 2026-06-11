@@ -495,10 +495,7 @@ function fetchLatestManga() {
 // スプレッドシートからONのジャンル・キーワードを取得
 function getActiveGenres() {
   try {
-    // ScriptPropertiesに SS_ID が設定されていればそちらを優先
-    const propId = PropertiesService.getScriptProperties().getProperty("SS_ID");
-    const spreadsheetId = propId || "141tleCwlMGBaEi6ST_ARzFiOqefPwZHvmHiZnJw09is";
-
+    const spreadsheetId = getOrCreateSpreadsheetId();
     const sheet = SpreadsheetApp
                     .openById(spreadsheetId)
                     .getSheetByName("設定");
@@ -610,9 +607,45 @@ function postToWordPress(title, content, postStatus, featuredMediaId) {
 // ============================================================
 // スプレッドシートID（getActiveGenres と同じシート）の「履歴」シートを使用
 // シートがなければ自動作成します
+// GAS実行アカウントがアクセスできるスプレッドシートIDを返す
+// 既存IDにアクセスできない場合は新規作成してScriptPropertiesに保存する
+function getOrCreateSpreadsheetId() {
+  const props = PropertiesService.getScriptProperties();
+  const candidates = [
+    props.getProperty("SS_ID"),
+    "141tleCwlMGBaEi6ST_ARzFiOqefPwZHvmHiZnJw09is"
+  ];
+
+  // アクセスできるIDがあればそれを使う
+  for (let i = 0; i < candidates.length; i++) {
+    const id = candidates[i];
+    if (!id) continue;
+    try {
+      SpreadsheetApp.openById(id);
+      return id;
+    } catch(e) {
+      // アクセス不可 → 次の候補へ
+    }
+  }
+
+  // どれもアクセスできない → 新規作成
+  const ss = SpreadsheetApp.create("アニメ収益化_データ");
+  const newId = ss.getId();
+
+  // 「設定」シートを作成（ジャンルフィルタ用）
+  const settingSheet = ss.getActiveSheet().setName("設定");
+  settingSheet.appendRow(["ジャンル名", "有効／無効", "キーワード"]);
+  settingSheet.appendRow(["アニメ全般", true, "アニメ、最新話、考察"]);
+  settingSheet.appendRow(["異世界転生", true, "異世界、転生、isekai"]);
+  settingSheet.setFrozenRows(1);
+
+  props.setProperty("SS_ID", newId);
+  Logger.log("新しいスプレッドシートを作成しました：" + ss.getUrl());
+  return newId;
+}
+
 function getHistorySheet() {
-  const propId = PropertiesService.getScriptProperties().getProperty("SS_ID");
-  const spreadsheetId = propId || "141tleCwlMGBaEi6ST_ARzFiOqefPwZHvmHiZnJw09is";
+  const spreadsheetId = getOrCreateSpreadsheetId();
   const ss = SpreadsheetApp.openById(spreadsheetId);
   let sheet = ss.getSheetByName("履歴");
   if (!sheet) {
