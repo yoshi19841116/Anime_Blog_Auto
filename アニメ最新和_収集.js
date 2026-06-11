@@ -494,29 +494,38 @@ function fetchLatestManga() {
 
 // スプレッドシートからONのジャンル・キーワードを取得
 function getActiveGenres() {
-  const SS_ID = "141tleCwlMGBaEi6ST_ARzFiOqefPwZHvmHiZnJw09is";
-  const sheet = SpreadsheetApp
-                  .openById(SS_ID)
-                  .getSheetByName("設定");
-  const rows = sheet.getDataRange().getValues();
-  
-  const activeKeywords = [];
-  
-  // 1行目はヘッダーなのでスキップ（i=1から開始）
-  for (let i = 1; i < rows.length; i++) {
-    const genreName = rows[i][0];  // A列：ジャンル名
-    const isActive  = rows[i][1];  // B列：チェックボックス
-    const keywords  = rows[i][2];  // C列：キーワード
-    
-    if (isActive && genreName) {
-      // キーワードをカンマで分割して配列に追加
-      const kwList = keywords.split("、").map(k => k.trim());
-      activeKeywords.push(...kwList);
+  try {
+    // ScriptPropertiesに SS_ID が設定されていればそちらを優先
+    const propId = PropertiesService.getScriptProperties().getProperty("SS_ID");
+    const spreadsheetId = propId || "141tleCwlMGBaEi6ST_ARzFiOqefPwZHvmHiZnJw09is";
+
+    const sheet = SpreadsheetApp
+                    .openById(spreadsheetId)
+                    .getSheetByName("設定");
+    const rows = sheet.getDataRange().getValues();
+
+    const activeKeywords = [];
+
+    // 1行目はヘッダーなのでスキップ（i=1から開始）
+    for (let i = 1; i < rows.length; i++) {
+      const genreName = rows[i][0];  // A列：ジャンル名
+      const isActive  = rows[i][1];  // B列：チェックボックス
+      const keywords  = rows[i][2];  // C列：キーワード
+
+      if (isActive && genreName) {
+        const kwList = keywords.split("、").map(function(k) { return k.trim(); });
+        activeKeywords.push.apply(activeKeywords, kwList);
+      }
     }
+
+    Logger.log("有効なキーワード：" + activeKeywords.join(", "));
+    return activeKeywords;
+
+  } catch(e) {
+    // スプレッドシートにアクセスできない場合は全件処理を続行
+    Logger.log("ジャンル設定読み込み失敗（全件処理します）：" + e.message);
+    return [];
   }
-  
-  Logger.log("有効なキーワード：" + activeKeywords.join(", "));
-  return activeKeywords;
 }
 
 // キーワードでRSS記事をフィルタリング
@@ -601,10 +610,10 @@ function postToWordPress(title, content, postStatus, featuredMediaId) {
 // ============================================================
 // スプレッドシートID（getActiveGenres と同じシート）の「履歴」シートを使用
 // シートがなければ自動作成します
-const SS_ID = "141tleCwlMGBaEi6ST_ARzFiOqefPwZHvmHiZnJw09is";
-
 function getHistorySheet() {
-  const ss = SpreadsheetApp.openById(SS_ID);
+  const propId = PropertiesService.getScriptProperties().getProperty("SS_ID");
+  const spreadsheetId = propId || "141tleCwlMGBaEi6ST_ARzFiOqefPwZHvmHiZnJw09is";
+  const ss = SpreadsheetApp.openById(spreadsheetId);
   let sheet = ss.getSheetByName("履歴");
   if (!sheet) {
     sheet = ss.insertSheet("履歴");
