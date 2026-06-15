@@ -383,6 +383,7 @@ function callClaudeManga(mangaTitle, summary) {
 
 function generateAllArticles() {
   Logger.log("=== アニメ記事生成開始 ===");
+  const animeCategoryId = getOrCreateCategory("アニメ考察");
   const animeList = fetchLatestAnimeWithRecovery();
 
   const filteredAnime = filterByGenre(animeList);
@@ -406,7 +407,7 @@ function generateAllArticles() {
       const thumbUrl = generateThumbnail(anime.title);
       const mediaId  = thumbUrl ? uploadMediaToWordPress(thumbUrl, "thumb_anime_" + Date.now()) : null;
 
-      const wpResult = postToWordPress(wpTitle, articleContent, "draft", mediaId);
+      const wpResult = postToWordPress(wpTitle, articleContent, "draft", mediaId, animeCategoryId);
       if (wpResult) {
         // 投稿に成功したときだけ履歴へ保存（失敗時は次回リトライ）
         saveArticleHistory(anime.title, articleContent, wpTitle, anime.link, "アニメ");
@@ -421,6 +422,7 @@ function generateAllArticles() {
   }
 
   Logger.log("=== 漫画記事生成開始 ===");
+  const mangaCategoryId = getOrCreateCategory("漫画考察");
   const mangaList = fetchLatestManga();
 
   const filteredManga = filterByGenre(mangaList);
@@ -444,7 +446,7 @@ function generateAllArticles() {
       const thumbUrl = generateThumbnail(manga.title);
       const mediaId  = thumbUrl ? uploadMediaToWordPress(thumbUrl, "thumb_manga_" + Date.now()) : null;
 
-      const wpResult = postToWordPress(wpTitle, articleContent, "draft", mediaId);
+      const wpResult = postToWordPress(wpTitle, articleContent, "draft", mediaId, mangaCategoryId);
       if (wpResult) {
         // 投稿に成功したときだけ履歴へ保存（失敗時は次回リトライ）
         saveArticleHistory(manga.title, articleContent, wpTitle, manga.link, "漫画");
@@ -555,6 +557,54 @@ function filterByGenre(articleList) {
 }
 
 // ============================================================
+// カテゴリ自動取得・作成ヘルパー
+// ============================================================
+// 指定した名前のカテゴリIDを返す。なければ自動作成する。
+function getOrCreateCategory(categoryName) {
+  const props = PropertiesService.getScriptProperties();
+  const wpUrl    = props.getProperty("WP_URL");
+  const username = props.getProperty("WP_USERNAME");
+  const appPass  = props.getProperty("WP_APP_PASSWORD");
+  const credentials = Utilities.base64Encode(username + ":" + appPass);
+  const headers = { "Authorization": "Basic " + credentials };
+
+  // まず既存カテゴリを検索
+  const searchRes = UrlFetchApp.fetch(
+    wpUrl + "/wp-json/wp/v2/categories?search=" + encodeURIComponent(categoryName) + "&per_page=10",
+    { headers: headers, muteHttpExceptions: true }
+  );
+  if (searchRes.getResponseCode() === 200) {
+    const cats = JSON.parse(searchRes.getContentText());
+    for (let i = 0; i < cats.length; i++) {
+      if (cats[i].name === categoryName) {
+        Logger.log("カテゴリ取得：" + categoryName + " (ID=" + cats[i].id + ")");
+        return cats[i].id;
+      }
+    }
+  }
+
+  // なければ新規作成
+  const createRes = UrlFetchApp.fetch(
+    wpUrl + "/wp-json/wp/v2/categories",
+    {
+      method: "post",
+      contentType: "application/json",
+      headers: headers,
+      payload: JSON.stringify({ name: categoryName }),
+      muteHttpExceptions: true
+    }
+  );
+  if (createRes.getResponseCode() === 201) {
+    const newCat = JSON.parse(createRes.getContentText());
+    Logger.log("カテゴリ作成：" + categoryName + " (ID=" + newCat.id + ")");
+    return newCat.id;
+  }
+
+  Logger.log("カテゴリ取得・作成失敗：" + categoryName);
+  return null;
+}
+
+// ============================================================
 // ① WordPress REST API 自動投稿
 // ============================================================
 // ScriptProperties に以下を設定してください：
@@ -562,7 +612,8 @@ function filterByGenre(articleList) {
 //   WP_USERNAME  : WordPressのユーザー名
 //   WP_APP_PASSWORD : 「アプリケーションパスワード」（設定→ユーザー→プロフィールで発行）
 // postStatus: "draft"（下書き） または "publish"（即公開）
-function postToWordPress(title, content, postStatus, featuredMediaId) {
+// categoryId: WordPressのカテゴリID（省略可）
+function postToWordPress(title, content, postStatus, featuredMediaId, categoryId) {
   const props = PropertiesService.getScriptProperties();
   const wpUrl     = props.getProperty("WP_URL");
   const username  = props.getProperty("WP_USERNAME");
@@ -581,6 +632,7 @@ function postToWordPress(title, content, postStatus, featuredMediaId) {
     status:  postStatus || "draft"
   };
   if (featuredMediaId) payload.featured_media = featuredMediaId;
+  if (categoryId)      payload.categories = [categoryId];
 
   const options = {
     method: "post",
