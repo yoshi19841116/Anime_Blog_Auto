@@ -900,8 +900,7 @@ function generateThumbnail(animeTitle) {
     model: "dall-e-3",
     prompt: prompt,
     n: 1,
-    size: "1024x1024",
-    response_format: "url"
+    size: "1024x1024"
   };
 
   const options = {
