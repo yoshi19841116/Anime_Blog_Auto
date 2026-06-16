@@ -92,7 +92,7 @@ function isSimilarTitle(titleA, titleB) {
   let intersection = 0;
   setA.forEach(function(bg) { if (setB.has(bg)) intersection++; });
   const union = setA.size + setB.size - intersection;
-  return intersection / union >= 0.5;
+  return intersection / union >= 0.4;
 }
 
 // 類似タイトルを除去（順番が早いものを優先して残す）
@@ -1255,7 +1255,19 @@ function listArticlesToSheet() {
     };
   });
 
-  const allItems = animeList.concat(mangaList);
+  // アニメ・漫画を合算してタイトル重複と類似度除去
+  const combined = animeList.concat(mangaList);
+  const seenTitles = new Set();
+  const uniqueItems = [];
+  combined.forEach(function(item) {
+    if (seenTitles.has(item.title)) return; // 完全一致除去
+    if (uniqueItems.some(function(e) { return isSimilarTitle(e.title, item.title); })) return; // 類似除去
+    seenTitles.add(item.title);
+    uniqueItems.push(item);
+  });
+  const allItems = uniqueItems;
+
+  Logger.log("アニメ：" + animeList.length + "件、漫画：" + mangaList.length + "件 → 重複除去後：" + allItems.length + "件");
 
   if (allItems.length === 0) {
     Logger.log("記事が取得できませんでした");
