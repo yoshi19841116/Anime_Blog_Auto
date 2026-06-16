@@ -1007,19 +1007,38 @@ function generateThumbnail(animeTitle) {
     muteHttpExceptions: true
   };
 
-  try {
-    const response = UrlFetchApp.fetch("https://api.openai.com/v1/images/generations", options);
-    if (response.getResponseCode() !== 200) {
-      Logger.log("DALL-E 3 エラー：HTTP " + response.getResponseCode() + " " + response.getContentText());
-      return null;
+  const MAX_RETRIES = 3;
+  const WAIT_MS = [5000, 10000, 20000]; // 5秒 → 10秒 → 20秒
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      Logger.log("DALL-E リトライ " + attempt + "/" + (MAX_RETRIES - 1) + "（" + (WAIT_MS[attempt - 1] / 1000) + "秒待機）");
+      Utilities.sleep(WAIT_MS[attempt - 1]);
     }
-    const result = JSON.parse(response.getContentText());
-    Logger.log("サムネイル生成成功：" + animeTitle);
-    return result.data[0].url;
-  } catch(e) {
-    Logger.log("DALL-E 3 例外：" + e.message);
-    return null;
+
+    try {
+      const response = UrlFetchApp.fetch("https://api.openai.com/v1/images/generations", options);
+      const statusCode = response.getResponseCode();
+
+      if (statusCode === 200) {
+        const result = JSON.parse(response.getContentText());
+        Logger.log("サムネイル生成成功：" + animeTitle + "（試行" + (attempt + 1) + "回目）");
+        return result.data[0].url;
+      }
+
+      // 429（レート制限）はリトライ、それ以外は即終了
+      const body = response.getContentText();
+      Logger.log("DALL-E 3 エラー：HTTP " + statusCode + " " + body);
+      if (statusCode !== 429) break;
+
+    } catch(e) {
+      Logger.log("DALL-E 3 例外：" + e.message);
+      break;
+    }
   }
+
+  Logger.log("サムネイル生成失敗（リトライ上限）：" + animeTitle);
+  return null;
 }
 
 // DALL-E 3 が返した画像URLをWordPressメディアライブラリへアップロード
