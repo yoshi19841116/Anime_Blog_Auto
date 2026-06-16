@@ -71,25 +71,28 @@ function testGenerateArticle() {
   Logger.log(article);
 }
 
-// タイトルの類似度チェック（Jaccard係数、0.55以上で類似判定）
+// タイトルの類似度チェック（文字バイグラム＋Jaccard係数、0.5以上で類似判定）
+// 日本語はスペースで区切れないため、2文字単位のn-gramで比較する
 function isSimilarTitle(titleA, titleB) {
-  function tokenize(t) {
-    return t
-      .replace(/TV|tv|アニメ|漫画|第\d+[話期巻]|【[^】]*】|「|」|『|』|！|？|\!|\?|　|\s+/g, " ")
-      .toLowerCase()
-      .trim()
-      .split(/\s+/)
-      .filter(function(w) { return w.length >= 2; });
+  function getBigrams(str) {
+    // ノイズ除去（アニメ/TV/記号/括弧など）
+    const clean = str
+      .replace(/TVアニメ|TV|アニメ|漫画|第\d+[話期巻章]/g, "")
+      .replace(/【[^】]*】|「|」|『|』|（[^）]*）|\([^)]*\)/g, "")
+      .replace(/[！？!?\s　]+/g, "");
+    const bigrams = new Set();
+    for (let i = 0; i < clean.length - 1; i++) {
+      bigrams.add(clean.substring(i, i + 2));
+    }
+    return bigrams;
   }
-  const a = tokenize(titleA);
-  const b = tokenize(titleB);
-  if (a.length === 0 || b.length === 0) return false;
-  const setA = new Set(a);
-  const setB = new Set(b);
+  const setA = getBigrams(titleA);
+  const setB = getBigrams(titleB);
+  if (setA.size < 3 || setB.size < 3) return false; // 短すぎるタイトルは判定しない
   let intersection = 0;
-  setA.forEach(function(w) { if (setB.has(w)) intersection++; });
+  setA.forEach(function(bg) { if (setB.has(bg)) intersection++; });
   const union = setA.size + setB.size - intersection;
-  return intersection / union >= 0.55;
+  return intersection / union >= 0.5;
 }
 
 // 類似タイトルを除去（順番が早いものを優先して残す）
@@ -142,7 +145,10 @@ function parseFeed(xml) {
 
   // RSS 2.0形式（<channel><item>）
   const channel = root.getChild("channel");
-  if (!channel) return [];
+  if (!channel) {
+    Logger.log("未対応フォーマット：ルートタグ=" + rootName + " xmlns=" + root.getNamespace().getURI());
+    return [];
+  }
   const items = channel.getChildren("item");
   return items.map(function(item) {
     return {
