@@ -548,15 +548,17 @@ function generateAllArticles() {
   Logger.log("=== 全記事生成完了！ ===");
 }
 
-// ⑪ 漫画専用RSS取得関数（アニメと重複しないソースのみ使用）
+// ⑪ 漫画専用RSS取得関数
 function fetchLatestManga() {
   const RSS_URLS = [
-    // donanetwork 漫画カテゴリ（アニメリストと被るが完全一致除去で対応）
-    "https://donanetwork.jp/category/anime-and-comic-information/feed",
-    // MANTANWEB（漫画・アニメ情報）
-    "https://mantan-web.jp/index.rss",
+    // コミックナタリー（Atom形式）
+    "https://natalie.mu/comic/feed/news",
     // マンバ通信（漫画専門メディア）
-    "https://manba.co.jp/manba_magazines/feed"
+    "https://manba.co.jp/manba_magazines/feed",
+    // donanetwork 漫画カテゴリ
+    "https://donanetwork.jp/category/anime-and-comic-information/feed",
+    // MANTANWEB
+    "https://mantan-web.jp/index.rss"
   ];
 
   const allItems = [];
@@ -1255,12 +1257,13 @@ function listArticlesToSheet() {
     };
   });
 
-  // アニメ・漫画を合算（クロスリストは完全一致のみ除去。類似度チェックは各リスト内で実施済み）
-  const animeTitles = new Set(animeList.map(function(i) { return i.title; }));
-  const mangaOnly = mangaList.filter(function(i) { return !animeTitles.has(i.title); });
-  const allItems = animeList.concat(mangaOnly);
+  // 漫画を優先：アニメリストから漫画と重複するタイトルを除去して結合
+  // 漫画 → アニメ（漫画と被らないもの）の順で並べる
+  const mangaTitles = new Set(mangaList.map(function(i) { return i.title; }));
+  const animeOnly = animeList.filter(function(i) { return !mangaTitles.has(i.title); });
+  const allItems = mangaList.concat(animeOnly);
 
-  Logger.log("アニメ：" + animeList.length + "件、漫画（重複除去後）：" + mangaOnly.length + "件 → 合計：" + allItems.length + "件");
+  Logger.log("漫画：" + mangaList.length + "件、アニメ（重複除去後）：" + animeOnly.length + "件 → 合計：" + allItems.length + "件");
 
   if (allItems.length === 0) {
     Logger.log("記事が取得できませんでした");
