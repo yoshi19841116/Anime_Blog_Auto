@@ -73,67 +73,74 @@ function testGenerateArticle() {
 
 function fetchLatestAnime() {
   const RSS_URLS = [
-    // アニメ情報
+    // donanetwork
     "https://donanetwork.jp/category/tv-anime-broadcast-information/feed",
     "https://donanetwork.jp/category/infoanime/feed",
-    // 漫画情報（追加）
     "https://donanetwork.jp/category/anime-and-comic-information/feed",
+    // アニメナタリー
+    "https://natalie.mu/anime/feed/news",
+    // アニメイトタイムズ
+    "https://www.animatetimes.com/rss/news.xml",
+    // 電撃オンライン
+    "https://dengekionline.com/rss/",
+    // コミックナタリー
     "https://natalie.mu/comic/feed/news",
     "https://comic.natalie.mu/feed/"
   ];
-  
+
+  const allItems = [];
+  const seenTitles = new Set();
+
   for (let i = 0; i < RSS_URLS.length; i++) {
     try {
       Logger.log("試行中：" + RSS_URLS[i]);
-      
+
       const response = UrlFetchApp.fetch(RSS_URLS[i], {
         muteHttpExceptions: true
       });
-      
+
       const statusCode = response.getResponseCode();
       Logger.log("ステータスコード：" + statusCode);
-      
+
       if (statusCode !== 200) {
         Logger.log("スキップ：" + RSS_URLS[i]);
         continue;
       }
-      
+
       const xml = response.getContentText();
       Logger.log("取得文字数：" + xml.length);
-      
+
       const document = XmlService.parse(xml);
       const root = document.getRootElement();
       const channel = root.getChild("channel");
       const items = channel.getChildren("item");
-      
-      Logger.log("記事数：" + items.length + "件");
-      
-      const animeList = [];
+
+      Logger.log("記事数：" + items.length + "件 (" + RSS_URLS[i] + ")");
+
       items.forEach(function(item) {
         const title = item.getChildText("title");
+        if (!title || seenTitles.has(title)) return;
+        seenTitles.add(title);
+
         const description = item.getChildText("description");
         const pubDate = item.getChildText("pubDate");
         const link = item.getChildText("link");
-        
-        animeList.push({
+
+        allItems.push({
           title: title,
           summary: description ? description.substring(0, 200) : "",
           pubDate: pubDate,
           link: link
         });
       });
-      
-      if (animeList.length > 0) {
-        Logger.log("成功：" + RSS_URLS[i]);
-        return animeList;
-      }
-      
+
     } catch(e) {
       Logger.log("エラー：" + RSS_URLS[i] + " → " + e.message);
     }
   }
-  
-  return [];
+
+  Logger.log("合計取得件数：" + allItems.length + "件");
+  return allItems;
 }
 
 // ④ RSS取得のテスト関数
@@ -467,39 +474,50 @@ function generateAllArticles() {
 function fetchLatestManga() {
   const RSS_URLS = [
     "https://donanetwork.jp/category/anime-and-comic-information/feed",
-    "https://natalie.mu/comic/feed/news"
+    "https://natalie.mu/comic/feed/news",
+    "https://comic.natalie.mu/feed/",
+    "https://www.animatetimes.com/rss/news.xml",
+    "https://dengekionline.com/rss/"
   ];
-  
+
+  const allItems = [];
+  const seenTitles = new Set();
+
   for (let i = 0; i < RSS_URLS.length; i++) {
     try {
       const response = UrlFetchApp.fetch(RSS_URLS[i], {
         muteHttpExceptions: true
       });
       if (response.getResponseCode() !== 200) continue;
-      
+
       const xml = response.getContentText();
       const document = XmlService.parse(xml);
       const root = document.getRootElement();
       const channel = root.getChild("channel");
       const items = channel.getChildren("item");
-      
-      if (items.length > 0) {
-        Logger.log("漫画RSS成功：" + RSS_URLS[i]);
-        return items.map(function(item) {
-          return {
-            title: item.getChildText("title"),
-            summary: (item.getChildText("description") || "")
-                       .substring(0, 200),
-            pubDate: item.getChildText("pubDate"),
-            link: item.getChildText("link")
-          };
+
+      Logger.log("漫画RSS成功：" + items.length + "件 (" + RSS_URLS[i] + ")");
+
+      items.forEach(function(item) {
+        const title = item.getChildText("title");
+        if (!title || seenTitles.has(title)) return;
+        seenTitles.add(title);
+
+        allItems.push({
+          title: title,
+          summary: (item.getChildText("description") || "").substring(0, 200),
+          pubDate: item.getChildText("pubDate"),
+          link: item.getChildText("link")
         });
-      }
+      });
+
     } catch(e) {
       Logger.log("漫画RSSエラー：" + e.message);
     }
   }
-  return [];
+
+  Logger.log("漫画合計取得件数：" + allItems.length + "件");
+  return allItems;
 }
 
 // スプレッドシートからONのジャンル・キーワードを取得
