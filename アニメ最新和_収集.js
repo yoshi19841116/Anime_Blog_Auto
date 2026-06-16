@@ -71,6 +71,40 @@ function testGenerateArticle() {
   Logger.log(article);
 }
 
+// タイトルの類似度チェック（Jaccard係数、0.55以上で類似判定）
+function isSimilarTitle(titleA, titleB) {
+  function tokenize(t) {
+    return t
+      .replace(/TV|tv|アニメ|漫画|第\d+[話期巻]|【[^】]*】|「|」|『|』|！|？|\!|\?|　|\s+/g, " ")
+      .toLowerCase()
+      .trim()
+      .split(/\s+/)
+      .filter(function(w) { return w.length >= 2; });
+  }
+  const a = tokenize(titleA);
+  const b = tokenize(titleB);
+  if (a.length === 0 || b.length === 0) return false;
+  const setA = new Set(a);
+  const setB = new Set(b);
+  let intersection = 0;
+  setA.forEach(function(w) { if (setB.has(w)) intersection++; });
+  const union = setA.size + setB.size - intersection;
+  return intersection / union >= 0.55;
+}
+
+// 類似タイトルを除去（順番が早いものを優先して残す）
+function deduplicateBySimilarity(items) {
+  const result = [];
+  items.forEach(function(item) {
+    const isDupe = result.some(function(existing) {
+      return isSimilarTitle(existing.title, item.title);
+    });
+    if (!isDupe) result.push(item);
+  });
+  Logger.log("類似度除去前：" + items.length + "件 → 除去後：" + result.length + "件");
+  return result;
+}
+
 // RSS/Atom/RDF(RSS1.0)全形式に対応したフィードパーサー
 function parseFeed(xml) {
   const document = XmlService.parse(xml);
@@ -176,8 +210,9 @@ function fetchLatestAnime() {
     }
   }
 
-  Logger.log("合計取得件数：" + allItems.length + "件");
-  return allItems;
+  const deduplicated = deduplicateBySimilarity(allItems);
+  Logger.log("合計取得件数：" + deduplicated.length + "件");
+  return deduplicated;
 }
 
 // ④ RSS取得のテスト関数
@@ -550,8 +585,9 @@ function fetchLatestManga() {
     }
   }
 
-  Logger.log("漫画合計取得件数：" + allItems.length + "件");
-  return allItems;
+  const deduplicated = deduplicateBySimilarity(allItems);
+  Logger.log("漫画合計取得件数：" + deduplicated.length + "件");
+  return deduplicated;
 }
 
 // スプレッドシートからONのジャンル・キーワードを取得
