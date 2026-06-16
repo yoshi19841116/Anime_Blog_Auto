@@ -71,21 +71,52 @@ function testGenerateArticle() {
   Logger.log(article);
 }
 
+// RSS/Atom両形式に対応したフィードパーサー
+function parseFeed(xml) {
+  const document = XmlService.parse(xml);
+  const root = document.getRootElement();
+  const rootName = root.getName();
+
+  // Atom形式（<feed><entry>）
+  if (rootName === "feed") {
+    const ns = root.getNamespace();
+    const entries = root.getChildren("entry", ns);
+    return entries.map(function(entry) {
+      const title = entry.getChildText("title", ns) || "";
+      const summary = entry.getChildText("summary", ns) || entry.getChildText("content", ns) || "";
+      const updated = entry.getChildText("updated", ns) || entry.getChildText("published", ns) || "";
+      // Atomのlinkは<link href="..."/>形式
+      const linkEl = entry.getChild("link", ns);
+      const link = linkEl ? (linkEl.getAttribute("href") ? linkEl.getAttribute("href").getValue() : linkEl.getText()) : "";
+      return { title: title, summary: summary, pubDate: updated, link: link };
+    });
+  }
+
+  // RSS形式（<channel><item>）
+  const channel = root.getChild("channel");
+  if (!channel) return [];
+  const items = channel.getChildren("item");
+  return items.map(function(item) {
+    const title = item.getChildText("title") || "";
+    const description = item.getChildText("description") || "";
+    const pubDate = item.getChildText("pubDate") || "";
+    const link = item.getChildText("link") || "";
+    return { title: title, summary: description, pubDate: pubDate, link: link };
+  });
+}
+
 function fetchLatestAnime() {
   const RSS_URLS = [
     // donanetwork
     "https://donanetwork.jp/category/tv-anime-broadcast-information/feed",
     "https://donanetwork.jp/category/infoanime/feed",
     "https://donanetwork.jp/category/anime-and-comic-information/feed",
-    // アニメナタリー
-    "https://natalie.mu/anime/feed/news",
-    // アニメイトタイムズ
-    "https://www.animatetimes.com/rss/news.xml",
-    // 電撃オンライン
-    "https://dengekionline.com/rss/",
-    // コミックナタリー
-    "https://natalie.mu/comic/feed/news",
-    "https://comic.natalie.mu/feed/"
+    // アニメナタリー（Atom形式）
+    "https://natalie.mu/anime/feed",
+    // アニメ！アニメ！
+    "https://animeanime.jp/rss/index.rdf",
+    // コミックナタリー（Atom形式）
+    "https://natalie.mu/comic/feed"
   ];
 
   const allItems = [];
@@ -108,29 +139,22 @@ function fetchLatestAnime() {
       }
 
       const xml = response.getContentText();
-      Logger.log("取得文字数：" + xml.length);
+      if (!xml || xml.length === 0) {
+        Logger.log("スキップ（空レスポンス）：" + RSS_URLS[i]);
+        continue;
+      }
 
-      const document = XmlService.parse(xml);
-      const root = document.getRootElement();
-      const channel = root.getChild("channel");
-      const items = channel.getChildren("item");
+      const parsed = parseFeed(xml);
+      Logger.log("記事数：" + parsed.length + "件 (" + RSS_URLS[i] + ")");
 
-      Logger.log("記事数：" + items.length + "件 (" + RSS_URLS[i] + ")");
-
-      items.forEach(function(item) {
-        const title = item.getChildText("title");
-        if (!title || seenTitles.has(title)) return;
-        seenTitles.add(title);
-
-        const description = item.getChildText("description");
-        const pubDate = item.getChildText("pubDate");
-        const link = item.getChildText("link");
-
+      parsed.forEach(function(item) {
+        if (!item.title || seenTitles.has(item.title)) return;
+        seenTitles.add(item.title);
         allItems.push({
-          title: title,
-          summary: description ? description.substring(0, 200) : "",
-          pubDate: pubDate,
-          link: link
+          title: item.title,
+          summary: item.summary.replace(/<[^>]*>/g, "").substring(0, 200),
+          pubDate: item.pubDate,
+          link: item.link
         });
       });
 
@@ -474,10 +498,10 @@ function generateAllArticles() {
 function fetchLatestManga() {
   const RSS_URLS = [
     "https://donanetwork.jp/category/anime-and-comic-information/feed",
-    "https://natalie.mu/comic/feed/news",
-    "https://comic.natalie.mu/feed/",
-    "https://www.animatetimes.com/rss/news.xml",
-    "https://dengekionline.com/rss/"
+    // コミックナタリー（Atom形式）
+    "https://natalie.mu/comic/feed",
+    // アニメ！アニメ！（漫画カテゴリ含む）
+    "https://animeanime.jp/rss/index.rdf"
   ];
 
   const allItems = [];
@@ -491,23 +515,19 @@ function fetchLatestManga() {
       if (response.getResponseCode() !== 200) continue;
 
       const xml = response.getContentText();
-      const document = XmlService.parse(xml);
-      const root = document.getRootElement();
-      const channel = root.getChild("channel");
-      const items = channel.getChildren("item");
+      if (!xml || xml.length === 0) continue;
 
-      Logger.log("漫画RSS成功：" + items.length + "件 (" + RSS_URLS[i] + ")");
+      const parsed = parseFeed(xml);
+      Logger.log("漫画RSS成功：" + parsed.length + "件 (" + RSS_URLS[i] + ")");
 
-      items.forEach(function(item) {
-        const title = item.getChildText("title");
-        if (!title || seenTitles.has(title)) return;
-        seenTitles.add(title);
-
+      parsed.forEach(function(item) {
+        if (!item.title || seenTitles.has(item.title)) return;
+        seenTitles.add(item.title);
         allItems.push({
-          title: title,
-          summary: (item.getChildText("description") || "").substring(0, 200),
-          pubDate: item.getChildText("pubDate"),
-          link: item.getChildText("link")
+          title: item.title,
+          summary: item.summary.replace(/<[^>]*>/g, "").substring(0, 200),
+          pubDate: item.pubDate,
+          link: item.link
         });
       });
 
