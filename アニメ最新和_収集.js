@@ -1128,3 +1128,156 @@ function setupWeeklyTriggers() {
   Logger.log("週3回（月・水・金 AM6:00）トリガーを設定しました");
   listTriggers();
 }
+
+// ============================================================
+// 手動記事選択機能
+// ============================================================
+
+// RSSから最新記事一覧をスプレッドシートに書き出す
+// GASエディタから「listArticlesToSheet」を実行するだけでOK
+function listArticlesToSheet() {
+  const spreadsheetId = getOrCreateSpreadsheetId();
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+
+  // シートがなければ作成
+  let sheet = ss.getSheetByName("手動投稿リスト");
+  if (!sheet) {
+    sheet = ss.insertSheet("手動投稿リスト");
+  }
+
+  // 既存データをクリア
+  sheet.clearContents();
+  sheet.clearFormats();
+
+  // ヘッダー
+  const headers = ["選択", "ジャンル", "タイトル", "日付", "概要（先頭100字）", "元URL"];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(1, 1, 1, headers.length)
+    .setBackground("#4a86e8")
+    .setFontColor("#ffffff")
+    .setFontWeight("bold");
+
+  // アニメ記事取得
+  const animeList = fetchLatestAnimeWithRecovery().map(function(item) {
+    return {
+      genre: "アニメ",
+      title: item.title,
+      pubDate: item.pubDate || "",
+      summary: (item.summary || "").replace(/<[^>]*>/g, "").substring(0, 100),
+      link: item.link || ""
+    };
+  });
+
+  // 漫画記事取得
+  const mangaList = fetchLatestManga().map(function(item) {
+    return {
+      genre: "漫画",
+      title: item.title,
+      pubDate: item.pubDate || "",
+      summary: (item.summary || "").replace(/<[^>]*>/g, "").substring(0, 100),
+      link: item.link || ""
+    };
+  });
+
+  const allItems = animeList.concat(mangaList);
+
+  if (allItems.length === 0) {
+    Logger.log("記事が取得できませんでした");
+    return;
+  }
+
+  // データ書き込み（2行目から）
+  const dataRows = allItems.map(function(item) {
+    return [false, item.genre, item.title, item.pubDate, item.summary, item.link];
+  });
+  sheet.getRange(2, 1, dataRows.length, headers.length).setValues(dataRows);
+
+  // A列をチェックボックスに設定
+  sheet.getRange(2, 1, dataRows.length, 1).insertCheckboxes();
+
+  // 列幅を見やすく調整
+  sheet.setColumnWidth(1, 50);   // 選択
+  sheet.setColumnWidth(2, 80);   // ジャンル
+  sheet.setColumnWidth(3, 350);  // タイトル
+  sheet.setColumnWidth(4, 150);  // 日付
+  sheet.setColumnWidth(5, 300);  // 概要
+  sheet.setColumnWidth(6, 200);  // URL
+
+  Logger.log("スプレッドシートに " + allItems.length + " 件を書き出しました");
+  Logger.log("「手動投稿リスト」シートを開いて、投稿したい記事の「選択」列にチェックを入れてください");
+  Logger.log("その後 generateFromManualList() を実行してください");
+}
+
+// 「手動投稿リスト」シートでチェックした記事だけ記事生成・WP投稿する
+function generateFromManualList() {
+  const spreadsheetId = getOrCreateSpreadsheetId();
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+  const sheet = ss.getSheetByName("手動投稿リスト");
+
+  if (!sheet) {
+    Logger.log("「手動投稿リスト」シートが見つかりません。先に listArticlesToSheet() を実行してください");
+    return;
+  }
+
+  const data = sheet.getDataRange().getValues();
+  // 1行目はヘッダー、2行目以降がデータ
+  const selected = [];
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === true) {
+      selected.push({
+        genre:   data[i][1],
+        title:   data[i][2],
+        pubDate: data[i][3],
+        summary: data[i][4],
+        link:    data[i][5]
+      });
+    }
+  }
+
+  if (selected.length === 0) {
+    Logger.log("チェックされた記事がありません。スプレッドシートの「選択」列にチェックを入れてください");
+    return;
+  }
+
+  Logger.log("手動選択記事 " + selected.length + " 件を処理します");
+
+  const animeCategoryId = getOrCreateCategory("アニメ考察");
+  const mangaCategoryId = getOrCreateCategory("漫画考察");
+
+  selected.forEach(function(item, index) {
+    Logger.log("=== " + (index + 1) + "/" + selected.length + " ：" + item.title + " ===");
+
+    if (isDuplicateArticle(item.title)) {
+      Logger.log("スキップ（重複）：" + item.title);
+      return;
+    }
+
+    const categoryId = item.genre === "漫画" ? mangaCategoryId : animeCategoryId;
+    const cleanSummary = (item.summary || "").replace(/<[^>]*>/g, "").trim();
+
+    const rawArticle = item.genre === "漫画"
+      ? callClaudeManga(item.title, cleanSummary)
+      : callClaude(item.title, "最新情報", cleanSummary);
+
+    const wpTitle = extractArticleTitle(rawArticle) || item.title;
+    let articleContent = markdownToHtml(rawArticle);
+    articleContent = insertAffiliateLinks(articleContent, item.title, item.genre);
+
+    const thumbUrl = generateThumbnail(item.title);
+    const mediaId  = thumbUrl ? uploadMediaToWordPress(thumbUrl, "thumb_manual_" + Date.now()) : null;
+
+    const wpResult = postToWordPress(wpTitle, articleContent, "draft", mediaId, categoryId);
+    if (wpResult) {
+      saveArticleHistory(item.title, articleContent, wpTitle, item.link, item.genre);
+      updateHistoryWithWpUrl(wpTitle, wpResult.link);
+      postToX(buildXPostText(wpTitle, wpResult.link, item.genre));
+      Logger.log("投稿完了：" + wpTitle + " → " + wpResult.link);
+    } else {
+      Logger.log("投稿失敗（履歴未保存）：" + wpTitle);
+    }
+
+    Utilities.sleep(3000);
+  });
+
+  Logger.log("=== 手動投稿処理完了 ===");
+}
