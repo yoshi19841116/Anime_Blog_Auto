@@ -71,7 +71,7 @@ function testGenerateArticle() {
   Logger.log(article);
 }
 
-// RSS/Atom両形式に対応したフィードパーサー
+// RSS/Atom/RDF(RSS1.0)全形式に対応したフィードパーサー
 function parseFeed(xml) {
   const document = XmlService.parse(xml);
   const root = document.getRootElement();
@@ -85,38 +85,51 @@ function parseFeed(xml) {
       const title = entry.getChildText("title", ns) || "";
       const summary = entry.getChildText("summary", ns) || entry.getChildText("content", ns) || "";
       const updated = entry.getChildText("updated", ns) || entry.getChildText("published", ns) || "";
-      // Atomのlinkは<link href="..."/>形式
       const linkEl = entry.getChild("link", ns);
       const link = linkEl ? (linkEl.getAttribute("href") ? linkEl.getAttribute("href").getValue() : linkEl.getText()) : "";
       return { title: title, summary: summary, pubDate: updated, link: link };
     });
   }
 
-  // RSS形式（<channel><item>）
+  // RDF形式 = RSS 1.0（<rdf:RDF><item>）
+  if (rootName === "RDF") {
+    const rss1Ns = XmlService.getNamespace("http://purl.org/rss/1.0/");
+    const dcNs   = XmlService.getNamespace("http://purl.org/dc/elements/1.1/");
+    const items  = root.getChildren("item", rss1Ns);
+    return items.map(function(item) {
+      return {
+        title:   item.getChildText("title",       rss1Ns) || "",
+        summary: item.getChildText("description", rss1Ns) || "",
+        pubDate: item.getChildText("date",        dcNs)   || "",
+        link:    item.getChildText("link",        rss1Ns) || ""
+      };
+    });
+  }
+
+  // RSS 2.0形式（<channel><item>）
   const channel = root.getChild("channel");
   if (!channel) return [];
   const items = channel.getChildren("item");
   return items.map(function(item) {
-    const title = item.getChildText("title") || "";
-    const description = item.getChildText("description") || "";
-    const pubDate = item.getChildText("pubDate") || "";
-    const link = item.getChildText("link") || "";
-    return { title: title, summary: description, pubDate: pubDate, link: link };
+    return {
+      title:   item.getChildText("title")       || "",
+      summary: item.getChildText("description") || "",
+      pubDate: item.getChildText("pubDate")     || "",
+      link:    item.getChildText("link")        || ""
+    };
   });
 }
 
 function fetchLatestAnime() {
   const RSS_URLS = [
-    // donanetwork
+    // donanetwork（RSS 2.0）
     "https://donanetwork.jp/category/tv-anime-broadcast-information/feed",
     "https://donanetwork.jp/category/infoanime/feed",
     "https://donanetwork.jp/category/anime-and-comic-information/feed",
-    // アニメナタリー（Atom形式）
-    "https://natalie.mu/anime/feed",
-    // アニメ！アニメ！
+    // アニメ！アニメ！（RSS 1.0 / RDF形式）
     "https://animeanime.jp/rss/index.rdf",
-    // コミックナタリー（Atom形式）
-    "https://natalie.mu/comic/feed"
+    // MANTANWEB まんたんウェブ（アニメ・漫画・映画）
+    "https://mantan-web.jp/index.rss"
   ];
 
   const allItems = [];
@@ -497,11 +510,12 @@ function generateAllArticles() {
 // ⑪ 漫画専用RSS取得関数
 function fetchLatestManga() {
   const RSS_URLS = [
+    // donanetwork（漫画・アニメ混合）
     "https://donanetwork.jp/category/anime-and-comic-information/feed",
-    // コミックナタリー（Atom形式）
-    "https://natalie.mu/comic/feed",
-    // アニメ！アニメ！（漫画カテゴリ含む）
-    "https://animeanime.jp/rss/index.rdf"
+    // アニメ！アニメ！（漫画記事含む、RSS 1.0 / RDF形式）
+    "https://animeanime.jp/rss/index.rdf",
+    // MANTANWEB（漫画・アニメ情報）
+    "https://mantan-web.jp/index.rss"
   ];
 
   const allItems = [];
